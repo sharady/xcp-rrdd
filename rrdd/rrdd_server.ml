@@ -113,6 +113,35 @@ let backup_rrds _ ?(remote_address = None) () : unit =
 		end
 	done
 
+let backup_sr_rrds _ () : unit =
+	debug "backing up sr rrds locally";
+	let total_cycles = 5 in
+	let cycles_tried = ref 0 in
+	while !cycles_tried < total_cycles do
+		if Mutex.try_lock mutex then begin
+			cycles_tried := total_cycles;
+			let srrds =
+				try
+					Hashtbl.fold (fun k v acc -> (k,v.rrd)::acc) sr_rrds []
+				with exn ->
+					Mutex.unlock mutex;
+					raise exn
+			in
+			Mutex.unlock mutex;
+			List.iter
+				(fun (uuid, rrd) ->
+					debug "Backup: saving RRD for SR uuid=%s to local disk" uuid;
+					let rrd = Mutex.execute mutex (fun () -> Rrd.copy_rrd rrd) in
+					archive_rrd_internal ~uuid ~rrd ()
+				) srrds;
+		end else begin
+			cycles_tried := 1 + !cycles_tried;
+			if !cycles_tried >= total_cycles
+			then debug "Could not acquire RRD lock, skipping SR RRD backup"
+			else Thread.delay 1.
+		end
+	done
+
 (* Load an RRD from the local filesystem. Will return an RRD or throw an exception. *)
 let load_rrd_from_local_filesystem uuid =
 	debug "Loading RRD from local filesystem for object uuid=%s" uuid;
